@@ -209,15 +209,98 @@ exports.deleteFarmer = async (companyId, farmerId) => {
 };
 
 /* ========= CUSTOMERS ========= */
-exports.createCustomer = async (companyId, data) => {
-  const res = await pool.query(`
-    INSERT INTO customers (company_id, name, mobile, credit_limit)
-    VALUES ($1,$2,$3,$4)
-    RETURNING id,name
-  `, [companyId, data.name, data.mobile, data.credit_limit || 0]);
-
-  return { message: 'Customer added', customer: res.rows[0] };
+// helper: safely convert to number
+const normalizeNumber = (value, defaultVal = 0) => {
+  if (value === '' || value === null || value === undefined) return defaultVal;
+  const num = Number(value);
+  return Number.isNaN(num) ? defaultVal : num;
 };
+
+const generateCustomerCode = async () => {
+  const res = await pool.query(
+    `SELECT nextval('customer_code_seq') AS seq`
+  );
+  return `CUST-${String(res.rows[0].seq).padStart(5, '0')}`;
+};
+
+
+exports.createCustomer = async (companyId, data) => {
+  const {
+    name,
+    shop_name,
+    mobile,
+    alternate_mobile,
+    city,
+    address,
+    customer_type,
+    credit_limit,
+    credit_days,
+    block_on_limit,
+    payment_mode,
+    upi_number,
+    opening_balance,
+    has_outstanding,
+  } = data;
+
+  if (!name || !mobile) {
+    throw new Error('Name and mobile are required');
+  }
+
+  const outstanding =
+    has_outstanding ? normalizeNumber(opening_balance) : 0;
+
+  // 🔥 generate unique customer code
+  const customerCode = await generateCustomerCode();
+
+  const res = await pool.query(
+    `
+    INSERT INTO customers (
+      company_id,
+      customer_code,
+      name,
+      shop_name,
+      mobile,
+      alternate_mobile,
+      city,
+      address,
+      customer_type,
+      credit_limit,
+      credit_days,
+      block_on_limit,
+      payment_mode,
+      upi_number,
+      outstanding
+    )
+    VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+    )
+    RETURNING *
+    `,
+    [
+      companyId,
+      customerCode,
+      name,
+      shop_name || null,
+      mobile,
+      alternate_mobile || null,
+      city || null,
+      address || null,
+      customer_type || 'GREEN',
+      normalizeNumber(credit_limit),
+      normalizeNumber(credit_days),
+      block_on_limit ?? true,
+      payment_mode || 'CASH',
+      upi_number || null,
+      outstanding,
+    ]
+  );
+
+  return {
+    message: 'Customer added successfully',
+    customer: res.rows[0],
+  };
+};
+
 
 exports.getCustomers = async (companyId) => {
   const res = await pool.query(
@@ -228,10 +311,34 @@ exports.getCustomers = async (companyId) => {
 };
 
 exports.updateCustomer = async (companyId, customerId, data) => {
-  const { name, mobile, credit_limit } = data;
+  const {
+    name,
+    shop_name,
+    mobile,
+    alternate_mobile,
+    city,
+    address,
+    customer_type,
+    credit_limit,
+    credit_days,
+    block_on_limit,
+    payment_mode,
+    upi_number,
+    has_outstanding,
+    opening_balance,
+  } = data;
 
-  if (!name && !mobile && credit_limit === undefined) {
-    throw new Error('Nothing to update');
+  let outstandingValue = null;
+  let updateOutstanding = false;
+
+  if (has_outstanding === true) {
+    outstandingValue = Number(opening_balance) || 0;
+    updateOutstanding = true;
+  }
+
+  if (has_outstanding === false) {
+    outstandingValue = 0;
+    updateOutstanding = true;
   }
 
   const res = await pool.query(
@@ -239,15 +346,47 @@ exports.updateCustomer = async (companyId, customerId, data) => {
     UPDATE customers
     SET
       name = COALESCE($1, name),
-      mobile = COALESCE($2, mobile),
-      credit_limit = COALESCE($3, credit_limit)
-    WHERE id=$4 AND company_id=$5
-    RETURNING id,name,mobile,credit_limit
+      shop_name = COALESCE($2, shop_name),
+      mobile = COALESCE($3, mobile),
+      alternate_mobile = COALESCE($4, alternate_mobile),
+      city = COALESCE($5, city),
+      address = COALESCE($6, address),
+      customer_type = COALESCE($7, customer_type),
+      credit_limit = COALESCE($8, credit_limit),
+      credit_days = COALESCE($9, credit_days),
+      block_on_limit = COALESCE($10, block_on_limit),
+      payment_mode = COALESCE($11, payment_mode),
+      upi_number = COALESCE($12, upi_number),
+      outstanding = CASE
+        WHEN $13 = true THEN $14
+        ELSE outstanding
+      END
+    WHERE id=$15 AND company_id=$16
+    RETURNING *
     `,
-    [name, mobile, credit_limit, customerId, companyId]
+    [
+      name,
+      shop_name,
+      mobile,
+      alternate_mobile,
+      city,
+      address,
+      customer_type,
+      credit_limit !== undefined ? Number(credit_limit) : null,
+      credit_days !== undefined ? Number(credit_days) : null,
+      block_on_limit,
+      payment_mode,
+      upi_number,
+      updateOutstanding,
+      outstandingValue,
+      customerId,
+      companyId,
+    ]
   );
 
-  if (!res.rows.length) throw new Error('Customer not found');
+  if (!res.rows.length) {
+    throw new Error('Customer not found');
+  }
 
   return {
     message: 'Customer updated successfully',
@@ -255,27 +394,6 @@ exports.updateCustomer = async (companyId, customerId, data) => {
   };
 };
 
-exports.updateCustomerStatus = async (companyId, customerId, status) => {
-  if (typeof status !== 'boolean') {
-    throw new Error('Invalid status');
-  }
-
-  const res = await pool.query(
-    `
-    UPDATE customers
-    SET status=$1
-    WHERE id=$2 AND company_id=$3
-    RETURNING id
-    `,
-    [status, customerId, companyId]
-  );
-
-  if (!res.rows.length) throw new Error('Customer not found');
-
-  return {
-    message: `Customer ${status ? 'enabled' : 'disabled'} successfully`,
-  };
-};
 
 exports.deleteCustomer = async (companyId, customerId) => {
   const res = await pool.query(
