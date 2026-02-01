@@ -1147,3 +1147,54 @@ exports.getCustomerLedger = async (companyId, filters) => {
 };
 
 
+// =======================================================
+// CUSTOMER SALES DETAILS (LIKE TRIP SALES)
+// =======================================================
+
+exports.getCustomerSalesDetails = async (companyId, customerId) => {
+  const result = await pool.query(
+    `
+   SELECT
+  s.id,
+  s.created_at::date AS sale_date,
+
+  c.name AS customer_name,   -- ✅ ADD THIS
+
+  t.id AS trip_id,
+  f.name AS farmer_name,
+  u.name AS driver_name,
+
+  s.cage_number,
+  s.sell_type,
+  s.bird_count,
+  s.weight,
+  s.rate,
+
+  s.total_amount,
+  s.payment_mode,
+  s.cash_amount,
+  s.upi_amount,
+
+  (
+    s.total_amount -
+    (COALESCE(s.cash_amount,0) + COALESCE(s.upi_amount,0))
+  ) AS pending
+
+FROM sales s
+JOIN customers c ON c.id = s.customer_id   -- ✅ ADD JOIN
+JOIN trips t ON t.id = s.trip_id
+JOIN farmers f ON f.id = t.farmer_id
+JOIN users u ON u.id = t.driver_id
+
+WHERE t.company_id = $1
+  AND s.customer_id = $2
+
+ORDER BY s.created_at DESC;
+
+
+    `,
+    [companyId, customerId]
+  );
+
+  return result.rows;
+};

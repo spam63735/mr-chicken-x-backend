@@ -495,6 +495,40 @@ exports.getCustomerLedger = async (req, res) => {
   }
 };
 
+// ----------------------------------------
+// CUSTOMER SALES DETAILS (DETAILED)
+// ----------------------------------------
+
+exports.getCustomerSalesDetails = async (req, res) => {
+  try {
+    const companyId = req.user.companyId;
+    const { customerId } = req.params;
+
+    if (!customerId) {
+      return res.status(400).json({
+        message: 'Customer ID is required',
+      });
+    }
+
+    const rows = await traderService.getCustomerSalesDetails(
+      companyId,
+      customerId
+    );
+
+    res.json({
+      success: true,
+      count: rows.length,
+      rows,
+    });
+  } catch (error) {
+    console.error('Customer Sales Error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to load customer sales',
+    });
+  }
+};
+
 
 
 

@@ -90,4 +90,11 @@ router.post(
   traderController.getCustomerLedger
 );
 
+router.get(
+  '/reports/customers/:customerId/sales',
+  authMiddleware,
+  traderController.getCustomerSalesDetails
+);
+
+
 module.exports = router;
