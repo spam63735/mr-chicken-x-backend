@@ -36,7 +36,6 @@ router.get(
   driverController.getTripCages
 );
 
-
 // 3️⃣ Sell to customer
 router.post(
   '/trips/:tripId/sell',

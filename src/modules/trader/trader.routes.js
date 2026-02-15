@@ -18,12 +18,20 @@ router.patch('/drivers/:id',authMiddleware,traderController.updateDrivers);
 router.patch('/drivers/:id/status', authMiddleware, traderController.updateDriverStatus);
 router.delete('/drivers/:id',authMiddleware,traderController.deleteDrivers);
 
+/* ================= LIFTER ================= */
+router.post('/lifters', authMiddleware, traderController.createLifter);
+router.get('/lifters', authMiddleware, traderController.getLifters);
+router.patch('/lifters/:id',authMiddleware,traderController.updateLifters);
+router.patch('/lifters/:id/status', authMiddleware, traderController.updateLifterStatus);
+router.delete('/lifters/:id',authMiddleware,traderController.deleteLifters);
+
 /* ================= FARMERS ================= */
 router.post('/farmers', authMiddleware, traderController.createFarmer);
 router.get('/farmers', authMiddleware, traderController.getFarmers);
 router.patch('/farmers/:id',authMiddleware,traderController.updateFarmer);
 router.patch('/farmers/:id/status',authMiddleware,traderController.updateFarmerStatus);
 router.delete('/farmers/:id',authMiddleware,traderController.deleteFarmer);
+router.patch('/farms/:id/location', authMiddleware, traderController.updateFarmLocation);
 
 /* ================= CUSTOMERS ================= */
 
@@ -61,6 +69,11 @@ router.get('/trips/:tripId/sales', authMiddleware, traderController.getTripSales
 /* ================= DAY CLOSE ================= */
 // Manager verifies cash & closes the day
 router.post('/trips/:tripId/close-day', authMiddleware, traderController.closeDay);
+router.get(
+  '/trips/:tripId/expenses',
+  authMiddleware,
+  traderController.getTripExpenses
+);
 
 /* ================= DASHBOARD ================= */
 router.get('/dashboard',authMiddleware,traderController.getDashboard);

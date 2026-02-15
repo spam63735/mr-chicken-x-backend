@@ -105,6 +105,58 @@ exports.deleteDrivers = async (req, res) => {
   }
 };
 
+/* ========= LIFTERS ========= */
+exports.createLifter = async (req, res) => {
+  try {
+    res.status(201).json(
+      await traderService.createUser(req.user.companyId, req.body, 'LIFTER')
+    );
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+
+exports.getLifters = async (req, res) => {
+  try {
+    res.json(await traderService.getUsers(req.user.companyId, 'LIFTER'));
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+
+exports.updateLifterStatus = async (req, res) => {
+  try {
+    res.json(await traderService.updateUserStatus(
+      req.user.companyId, req.params.id, req.body.status, 'LIFTER'
+    ));
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+
+exports.updateLifters = async (req, res) => {
+  try {
+    res.json(
+      await traderService.updateUser(
+        req.user.companyId,
+        req.params.id,
+        req.body,
+        'LIFTER'
+      )
+    );
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+};
+
+exports.deleteLifters = async (req, res) => {
+  try {
+    res.json(
+      await traderService.deleteUser(
+        req.user.companyId,
+        req.params.id,
+        'LIFTER'
+      )
+    );
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+};
+
 /* ========= FARMERS ========= */
 exports.createFarmer = async (req, res) => {
   try {
@@ -129,6 +181,20 @@ exports.updateFarmer = async (req, res) => {
         req.body
       )
     );
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+};
+
+exports.updateFarmLocation = async (req, res) => {
+  try {
+    const result = await traderService.updateFarmLocation(
+      req.user.companyId,
+      req.params.id,
+      req.body
+    );
+
+    res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
@@ -244,17 +310,17 @@ exports.getAllCustomersOutstanding = async (req, res) => {
  * This API assigns driver to farmer
  */
 exports.createTrip = async (req, res) => {
+  console.log(req)
   try {
     const trip = await traderService.createTrip(
       req.user.companyId,
       {
-        farmer_id: req.body.farmer_id,
+        farm_id: req.body.farm_id,        // ✅ FIXED
         driver_id: req.body.driver_id,
+        lifter_id: req.body.lifter_id,
         total_birds: req.body.total_birds,
         trip_time: req.body.trip_time,
         trip_date: req.body.trip_date,
-        
-        // NEW FIELDS
         contact_name: req.body.contact_name,
         contact_phone: req.body.contact_phone,
       }
@@ -265,7 +331,6 @@ exports.createTrip = async (req, res) => {
     res.status(400).json({ message: e.message });
   }
 };
-
 
 exports.getTrips = async (req, res) => {
   try {
@@ -322,6 +387,18 @@ exports.closeDay = async (req, res) => {
   } catch (e) { res.status(400).json({ message: e.message }); }
 };
 
+exports.getTripExpenses = async (req, res) => {
+  try {
+    res.json(
+      await traderService.getTripExpenses(
+        req.user.companyId,
+        req.params.tripId
+      )
+    );
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+};
 
 /* ========= DASHBOARD ========= */
 exports.getDashboard = async (req, res) => {

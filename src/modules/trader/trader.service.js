@@ -1,7 +1,7 @@
 const pool = require('../../config/db');
 const bcrypt = require('bcrypt');
 
-/* ========= COMMON USER (MANAGER / DRIVER) ========= */
+/* ========= COMMON USER (MANAGER / DRIVER / LIFTER) ========= */
 exports.createUser = async (companyId, { name, mobile, password }, role) => {
   if (!name || !mobile || !password) throw new Error('All fields required');
 
@@ -104,68 +104,213 @@ exports.deleteUser = async (companyId, userId, role) => {
 
 
 /* ========= FARMERS ========= */
-exports.createFarmer = async (
-  companyId,
-  { name, mobile, location, latitude, longitude }
-) => {
-  const res = await pool.query(
-    `
-    INSERT INTO farmers (company_id, name, mobile, location, latitude, longitude)
-    VALUES ($1,$2,$3,$4,$5,$6)
-    RETURNING id, name, mobile, location, latitude, longitude
-    `,
-    [companyId, name, mobile, location, latitude, longitude]
-  );
+exports.createFarmer = async (companyId, { name, mobile, farms }) => {
+  const client = await pool.connect();
 
-  return {
-    message: 'Farmer added',
-    farmer: res.rows[0],
-  };
+  try {
+    await client.query('BEGIN');
+
+    if (!name || !name.trim()) {
+      throw new Error('Farmer name is required');
+    }
+
+    if (!farms || farms.length === 0) {
+      throw new Error('At least one farm is required');
+    }
+
+    // 1️⃣ Insert Farmer
+    const farmerRes = await client.query(
+      `
+      INSERT INTO farmers (company_id, name, mobile)
+      VALUES ($1,$2,$3)
+      RETURNING id, name, mobile
+      `,
+      [companyId, name.trim(), mobile || null]
+    );
+
+    const farmer = farmerRes.rows[0];
+
+    // 2️⃣ Insert Farms
+    for (const farm of farms) {
+      if (!farm.location || !farm.location.trim()) {
+        continue; // skip empty farms
+      }
+
+      await client.query(
+        `
+        INSERT INTO farms (farmer_id, location, latitude, longitude)
+        VALUES ($1,$2,$3,$4)
+        `,
+        [
+          farmer.id,
+          farm.location.trim(),
+          farm.latitude || null,
+          farm.longitude || null,
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      message: 'Farmer added successfully',
+      farmer,
+    };
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 };
+
 
 exports.getFarmers = async (companyId) => {
   const res = await pool.query(
-    'SELECT * FROM farmers WHERE company_id=$1 ORDER BY created_at DESC',
+    `
+    SELECT 
+      f.id AS farmer_id,
+      f.name AS farmer_name,
+      f.mobile,
+      f.status,
+      f.created_at,
+      fa.id AS farm_id,
+      fa.location,
+      fa.latitude,
+      fa.longitude
+    FROM farmers f
+    LEFT JOIN farms fa ON fa.farmer_id = f.id
+    WHERE f.company_id = $1
+    ORDER BY f.created_at DESC
+    `,
     [companyId]
   );
-  return res.rows;
-};
 
-exports.updateFarmer = async (companyId, farmerId, data) => {
-  const { name, mobile, location, latitude, longitude } = data;
+  // Group farms under farmer
+  const farmersMap = {};
 
-  if (
-    name === undefined &&
-    mobile === undefined &&
-    location === undefined &&
-    latitude === undefined &&
-    longitude === undefined
-  ) {
-    throw new Error('Nothing to update');
+  for (const row of res.rows) {
+    if (!farmersMap[row.farmer_id]) {
+      farmersMap[row.farmer_id] = {
+        id: row.farmer_id,
+        name: row.farmer_name,
+        mobile: row.mobile,
+        status: row.status,
+        created_at: row.created_at,
+        farms: [],
+      };
+    }
+
+    if (row.farm_id) {
+      farmersMap[row.farmer_id].farms.push({
+        id: row.farm_id,
+        name: row.farm_name,
+        location: row.location,
+        latitude: row.latitude,
+        longitude: row.longitude,
+      });
+    }
   }
 
+  return Object.values(farmersMap);
+};
+
+exports.updateFarmer = async (
+  companyId,
+  farmerId,
+  { name, mobile, farms }
+) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 1️⃣ Check farmer exists
+    const check = await client.query(
+      `SELECT id FROM farmers WHERE id=$1 AND company_id=$2`,
+      [farmerId, companyId]
+    );
+
+    if (!check.rows.length) {
+      throw new Error('Farmer not found');
+    }
+
+    // 2️⃣ Update farmer basic info
+    await client.query(
+      `
+      UPDATE farmers
+      SET
+        name = COALESCE($1, name),
+        mobile = COALESCE($2, mobile)
+      WHERE id=$3 AND company_id=$4
+      `,
+      [name, mobile, farmerId, companyId]
+    );
+
+    // 3️⃣ Delete old farms
+    await client.query(
+      `DELETE FROM farms WHERE farmer_id=$1`,
+      [farmerId]
+    );
+
+    // 4️⃣ Insert new farms
+    if (farms && farms.length > 0) {
+      for (const farm of farms) {
+        await client.query(
+          `
+          INSERT INTO farms (farmer_id, location, latitude, longitude)
+          VALUES ($1,$2,$3,$4)
+          `,
+          [
+            farmerId,
+            farm.location,
+            farm.latitude,
+            farm.longitude,
+          ]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      message: 'Farmer updated successfully',
+    };
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+exports.updateFarmLocation = async (
+  companyId,
+  farmId,
+  { latitude, longitude }
+) => {
   const res = await pool.query(
     `
-    UPDATE farmers
-    SET
-      name = COALESCE($1, name),
-      mobile = COALESCE($2, mobile),
-      location = COALESCE($3, location),
-      latitude = COALESCE($4, latitude),
-      longitude = COALESCE($5, longitude)
-    WHERE id=$6 AND company_id=$7
-    RETURNING id, name, mobile, location, latitude, longitude
+    UPDATE farms f
+    SET latitude=$1,
+        longitude=$2
+    FROM farmers fr
+    WHERE f.id=$3
+      AND f.farmer_id = fr.id
+      AND fr.company_id=$4
+    RETURNING f.id
     `,
-    [name, mobile, location, latitude, longitude, farmerId, companyId]
+    [latitude, longitude, farmId, companyId]
   );
 
   if (!res.rows.length) {
-    throw new Error('Farmer not found');
+    throw new Error('Farm not found');
   }
 
   return {
-    message: 'Farmer updated successfully',
-    farmer: res.rows[0],
+    message: 'Farm location updated successfully',
   };
 };
 
@@ -174,21 +319,48 @@ exports.updateFarmerStatus = async (companyId, farmerId, status) => {
     throw new Error('Invalid status');
   }
 
-  const res = await pool.query(
-    `
-    UPDATE farmers
-    SET status=$1
-    WHERE id=$2 AND company_id=$3
-    RETURNING id
-    `,
-    [status, farmerId, companyId]
-  );
+  const client = await pool.connect();
 
-  if (!res.rows.length) throw new Error('Farmer not found');
+  try {
+    await client.query('BEGIN');
 
-  return {
-    message: `Farmer ${status ? 'enabled' : 'disabled'} successfully`,
-  };
+    // 1️⃣ Update Farmer
+    const farmerRes = await client.query(
+      `
+      UPDATE farmers
+      SET status = $1
+      WHERE id = $2 AND company_id = $3
+      RETURNING id
+      `,
+      [status, farmerId, companyId]
+    );
+
+    if (!farmerRes.rows.length) {
+      throw new Error('Farmer not found');
+    }
+
+    // 2️⃣ Update All Related Farms
+    await client.query(
+      `
+      UPDATE farms
+      SET status = $1
+      WHERE farmer_id = $2
+      `,
+      [status, farmerId]
+    );
+
+    await client.query('COMMIT');
+
+    return {
+      message: `Farmer ${status ? 'enabled' : 'disabled'} successfully`,
+    };
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 exports.deleteFarmer = async (companyId, farmerId) => {
@@ -436,12 +608,7 @@ exports.getAllCustomersOutstanding = async (companyId) => {
       name,
       mobile,
       outstanding,
-
-      CASE
-        WHEN outstanding = 0 THEN 'GREEN'
-        WHEN outstanding <= 5000 THEN 'BLUE'
-        ELSE 'RED'
-      END AS status
+      customer_type
 
     FROM customers
     WHERE company_id = $1
@@ -458,9 +625,10 @@ exports.getAllCustomersOutstanding = async (companyId) => {
  * Assign trip: Trader/Manager assigns driver to farmer
  */
 exports.createTrip = async (companyId, data) => {
-  const {
-    farmer_id,
+  let {
+    farm_id,
     driver_id,
+    lifter_id,
     total_birds,
     trip_time,
     trip_date,
@@ -468,8 +636,18 @@ exports.createTrip = async (companyId, data) => {
     contact_phone,
   } = data;
 
-  if (!farmer_id || !driver_id || !trip_date || !trip_time) {
-    throw new Error('Farmer, Driver, Date and Time are required');
+  // 🔥 Convert IDs to numbers
+  farm_id = Number(farm_id);
+  driver_id = Number(driver_id);
+
+  // ✅ Safer validation
+  if (
+    !farm_id ||
+    !driver_id ||
+    !trip_date ||
+    !trip_time
+  ) {
+    throw new Error('Farm, Driver, Date and Time are required');
   }
 
   if (contact_phone && contact_phone.length !== 10) {
@@ -480,22 +658,24 @@ exports.createTrip = async (companyId, data) => {
     `
     INSERT INTO trips (
       company_id,
-      farmer_id,
+      farm_id,
       driver_id,
+       lifter_id,   
       total_birds,
       trip_time,
       trip_date,
       contact_name,
       contact_phone
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
     RETURNING *
     `,
     [
       companyId,
-      farmer_id,
+      farm_id,
       driver_id,
-      total_birds,
+      lifter_id,     // ✅ ADD
+      total_birds || 0,
       trip_time,
       trip_date,
       contact_name || null,
@@ -512,16 +692,26 @@ exports.getTrips = async (companyId) => {
       t.id,
       t.company_id,
 
-      -- Farmer Info
-      t.farmer_id,
+      -- Farm Info
+      t.farm_id,
+      fa.location AS farm_location,
+      fa.latitude AS farm_latitude,
+      fa.longitude AS farm_longitude,
+
+      -- Farmer Info (via farm)
+      f.id AS farmer_id,
       f.name AS farmer_name,
       f.mobile AS farmer_mobile,
-      f.location AS farmer_location,
 
       -- Driver Info
       t.driver_id,
       u.name AS driver_name,
       u.mobile AS driver_mobile,
+
+      -- Lifter Info
+      t.lifter_id,
+      lifter.name AS lifter_name,
+      lifter.mobile AS lifter_mobile,
 
       -- Trip Details
       t.total_birds,
@@ -540,8 +730,18 @@ exports.getTrips = async (companyId) => {
       t.closed_at
 
     FROM trips t
-    LEFT JOIN farmers f ON f.id = t.farmer_id
+
+    -- Join farm directly
+    LEFT JOIN farms fa ON fa.id = t.farm_id
+
+    -- Join farmer via farm
+    LEFT JOIN farmers f ON f.id = fa.farmer_id
+
+    -- Join driver
     LEFT JOIN users u ON u.id = t.driver_id
+
+    -- Join Lifter
+    LEFT JOIN users lifter ON lifter.id = t.lifter_id
 
     WHERE t.company_id = $1
 
@@ -553,8 +753,9 @@ exports.getTrips = async (companyId) => {
 
 exports.updateTrip = async (companyId, tripId, data) => {
   const {
-    farmer_id,
+    farm_id,
     driver_id,
+    lifter_id,   // ✅ ADD
     total_birds,
     trip_date,
     trip_time,
@@ -570,21 +771,23 @@ exports.updateTrip = async (companyId, tripId, data) => {
     `
     UPDATE trips
     SET
-      farmer_id = COALESCE($1, farmer_id),
+      farm_id = COALESCE($1, farm_id),
       driver_id = COALESCE($2, driver_id),
-      total_birds = COALESCE($3, total_birds),
-      trip_date = COALESCE($4, trip_date),
-      trip_time = COALESCE($5, trip_time),
-      contact_name = COALESCE($6, contact_name),
-      contact_phone = COALESCE($7, contact_phone)
-    WHERE id = $8
-      AND company_id = $9
+      lifter_id = COALESCE($4, lifter_id),   
+      total_birds = COALESCE($4, total_birds),
+      trip_date = COALESCE($5, trip_date),
+      trip_time = COALESCE($6, trip_time),
+      contact_name = COALESCE($7, contact_name),
+      contact_phone = COALESCE($8, contact_phone)
+    WHERE id = $9
+      AND company_id = $10
       AND status != 'CLOSED'
     RETURNING *
     `,
     [
-      farmer_id,
+      farm_id,
       driver_id,
+      lifter_id,
       total_birds,
       trip_date,
       trip_time,
@@ -626,7 +829,6 @@ exports.deleteTrip = async (companyId, tripId) => {
   };
 };
 
-
 /* ========= SALES (MANAGER VIEW) ========= */
 
 exports.getTripSales = async (companyId, tripId) => {
@@ -663,15 +865,23 @@ exports.getTripSales = async (companyId, tripId) => {
 exports.closeDay = async (
   companyId,
   tripId,
-  { diesel_expense = 0, other_expense = 0 }
+  {
+    diesel_expense = 0,
+    other_expense = 0,
+    driver_expense = 0,
+    purchase_rate_per_kg = 0,
+  }
 ) => {
   // 1️⃣ Check trip exists
-  const tripRes = await pool.query(`
+  const tripRes = await pool.query(
+    `
     SELECT status
     FROM trips
     WHERE id = $1
       AND company_id = $2
-  `, [tripId, companyId]);
+  `,
+    [tripId, companyId]
+  );
 
   if (!tripRes.rows.length) {
     throw new Error('Trip not found');
@@ -688,27 +898,60 @@ exports.closeDay = async (
   }
 
   // 2️⃣ Save expenses (trip-based)
-  await pool.query(`
+  await pool.query(
+    `
     INSERT INTO expenses (
       trip_id,
       diesel_expense,
       other_expense,
+      driver_expense,
+      purchase_rate_per_kg,
       created_at
     )
-    VALUES ($1, $2, $3, NOW())
-  `, [tripId, diesel_expense, other_expense]);
+    VALUES ($1, $2, $3, $4, $5, NOW())
+  `,
+    [
+      tripId,
+      diesel_expense,
+      other_expense,
+      driver_expense,
+      purchase_rate_per_kg,
+    ]
+  );
 
   // 3️⃣ Close trip
-  await pool.query(`
+  await pool.query(
+    `
     UPDATE trips
     SET status = 'CLOSED',
         closed_at = NOW()
     WHERE id = $1
-  `, [tripId]);
+  `,
+    [tripId]
+  );
 
   return { message: 'Day closed successfully' };
 };
-  
+exports.getTripExpenses = async (companyId, tripId) => {
+
+  const result = await pool.query(
+    `SELECT 
+        id,
+        diesel_expense,
+        driver_expense,
+        other_expense,
+        purchase_rate_per_kg,
+        created_at
+     FROM expenses
+     WHERE trip_id = $1
+     ORDER BY created_at ASC`,
+    [tripId]
+  );
+
+  return result.rows;
+};
+
+
 /* ========= DASHBOARD ========= */
 exports.getDashboard = async (companyId) => {
   const [
@@ -759,12 +1002,18 @@ exports.getDashboard = async (companyId) => {
 
     // ===================== TRIP STATUS =====================
     pool.query(`
-      SELECT
-        status,
-        COUNT(*) AS count
-      FROM trips
-      WHERE company_id = $1
-      GROUP BY status
+  SELECT
+    status,
+    COUNT(*) AS count,
+    MAX(
+      CASE
+        WHEN status = 'CLOSED' THEN closed_at
+        ELSE created_at
+      END
+    ) AS action_time
+  FROM trips
+  WHERE company_id = $1
+  GROUP BY status
     `, [companyId])
   ]);
 
